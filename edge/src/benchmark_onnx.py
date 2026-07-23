@@ -123,7 +123,7 @@ def benchmark_model(model_path: str, config_path=None) -> Dict:
     print("=" * 50 + "\n")
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_DIR / 'benchmark_fp32.md'
+    report_path = REPORTS_DIR / f'benchmark_{Path(model_path).stem}.md'
     with open(report_path, 'w') as f:
         f.write("# ONNX Benchmark Report\n\n")
         f.write(f"**Date:** {results['timestamp']}  \n")

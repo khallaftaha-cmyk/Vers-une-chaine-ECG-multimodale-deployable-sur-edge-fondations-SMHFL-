@@ -56,6 +56,13 @@ def export_to_onnx(model_path: str, config_path=None, output_path: str = None):
         }
 
     print(f"Exporting model to {output_path}...")
+    # dynamo=False: force the legacy TorchScript-based exporter. The newer
+    # dynamo-based exporter has been unreliable at tracing shapes through
+    # the BiLSTM's hn[-2]/hn[-1] slice + concat pattern in this model's
+    # forward() -- it can leave stale shape metadata (e.g. 128 instead of
+    # the true 256 post-concat) that later trips strict-mode ONNX shape
+    # inference during quantization ("Inferred shape and existing shape
+    # differ in dimension 0: (256) vs (128)").
     torch.onnx.export(
         model,
         dummy_input,
@@ -65,7 +72,8 @@ def export_to_onnx(model_path: str, config_path=None, output_path: str = None):
         do_constant_folding=True,
         input_names=['ecg_input'],
         output_names=['classification'],
-        dynamic_axes=dynamic_axes
+        dynamic_axes=dynamic_axes,
+        dynamo=False
     )
 
     # 7. Validate
