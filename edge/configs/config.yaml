@@ -32,9 +32,8 @@ label_mapping:
   "426783006": "Sinus Rhythm"           # SR
   "164889003": "Atrial Fibrillation"     # AF
   "164890007": "Atrial Flutter"          # AFL
-  "427084000": "Sinus Tachycardia"       # ST
   "426177001": "Sinus Bradycardia"       # SB
-  "426761007": "Sinus Irregularity"      # SI
+  "426761007": "GSVT"                    # Generic Supraventricular Tachycardia -- matches Iman's class
   "713422000": "Sinus Arrhythmia"        # SA
   "233896004": "Supraventricular Tachycardia"  # SVT
   "27885002": "Right Bundle Branch Block"      # RBBB
