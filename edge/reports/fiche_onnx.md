@@ -57,11 +57,11 @@ Alignées avec le modèle d'Iman via le SNOMED-CT :
 
 | Métrique | FP32 | INT8 |
 |---|---|---|
-| Taille modèle | ___ MB | ___ MB |
-| Latence moyenne | ___ ms | ___ ms |
-| Latence p95 | ___ ms | ___ ms |
-| Accuracy | ___ | ___ |
-| Macro F1 | ___ | ___ |
+| Taille modèle | 3.64 MB | 0.93 MB |
+| Latence moyenne | 18.01 ms | 41.88 ms |
+| Latence p95 | 20.68 ms | 45.29 ms |
+| Accuracy | 98.93% | 99.01% |
+| Macro F1 | 0.9885 | 0.9892 |
 
 ## Performance (Raspberry Pi)
 
