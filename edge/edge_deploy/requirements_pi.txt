@@ -1,0 +1,9 @@
+# Lightweight dependencies for Raspberry Pi / Edge deployment
+# Note: PyTorch is NOT required on the Pi because we only run ONNX Runtime inference!
+
+onnxruntime>=1.16.0
+numpy>=1.24.0
+scipy>=1.10.0
+psutil>=5.9.0
+pyyaml>=6.0
+tqdm>=4.66.0
