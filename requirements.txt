@@ -12,6 +12,6 @@ scikit-learn>=1.5.0
 pyyaml>=6.0
 tqdm>=4.66.0
 psutil>=5.9.0
-# onnxruntime-extensions>=0.10.0
-# paho-mqtt>=2.0.0  # Week 5 - MQTT
+onnxruntime-extensions>=0.10.0
+paho-mqtt>=2.0.0
 

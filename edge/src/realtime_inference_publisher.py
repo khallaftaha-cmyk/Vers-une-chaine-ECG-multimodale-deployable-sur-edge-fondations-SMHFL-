@@ -22,12 +22,18 @@ from datetime import datetime
 import numpy as np
 import onnxruntime as ort
 import paho.mqtt.client as mqtt
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data_loader import load_config
+# Deliberately NOT importing from src.data_loader here -- that module pulls
+# in pandas, wfdb, sklearn (training-only dependencies). This publisher only
+# needs the tiny bit of config.yaml under 'edge:', so we read it directly
+# with PyYAML. Keeps the Pi's install lightweight (matches requirements_pi.txt).
+def load_edge_config() -> dict:
+    config_path = PROJECT_ROOT / 'configs' / 'config.yaml'
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 # Placeholder until class_to_idx is wired in from a real dataset scan --
 # order must match your config.yaml label_mapping's top-4 classes.
@@ -54,7 +60,7 @@ def run_inference(session: ort.InferenceSession, input_name: str, x: np.ndarray)
 
 
 def main(model_path: str, num_cycles: int, interval_seconds: float, broker_override: str = None):
-    config = load_config()
+    config = load_edge_config()
     edge_cfg = config.get('edge', {})
     broker = broker_override or edge_cfg.get('mqtt_broker', 'localhost')
     port = edge_cfg.get('mqtt_port', 1883)
