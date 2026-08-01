@@ -33,9 +33,13 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
-        print(f"\n[{payload.get('timestamp', '?')}] "
-              f"Prediction: {payload.get('predicted_class', '?')} "
-              f"(confidence: {payload.get('confidence', 0):.3f})")
+        line = (f"\n[{payload.get('timestamp', '?')}] "
+                f"Prediction: {payload.get('predicted_class', '?')} "
+                f"(confidence: {payload.get('confidence', 0):.3f})")
+        if 'true_class' in payload:
+            mark = "correct" if payload.get('correct') else "WRONG"
+            line += f" | True: {payload['true_class']} [{mark}]"
+        print(line)
     except (json.JSONDecodeError, UnicodeDecodeError):
         print(f"\nReceived non-JSON message: {msg.payload}")
 

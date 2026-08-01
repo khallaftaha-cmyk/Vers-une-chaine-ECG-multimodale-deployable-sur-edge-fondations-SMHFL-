@@ -1,15 +1,20 @@
 """Run ONNX inference repeatedly and publish each result over MQTT.
 
-For now this uses random dummy input on each cycle (same idea as
-benchmark_onnx.py) just to prove the real-time chain works: inference
--> MQTT publish -> subscriber receives it. Once you're deploying on
-the actual Raspberry Pi with a real ECG source, swap out
-`generate_dummy_input()` for your real acquisition step.
+Loops through REAL, already-preprocessed ECG test signals (exported by
+src/export_demo_signals.py on the PC, since the Pi doesn't have the full
+data pipeline installed). Each cycle publishes the predicted class,
+confidence, AND the true label if available -- so the subscriber can show
+whether each prediction was actually correct, live.
 
-Run src/mqtt_subscriber_test.py FIRST in another terminal, then run
-this.
+Falls back to random dummy input (the old behavior) if no --signals-path
+is given, e.g. for a quick connectivity smoke test.
 
-Usage:
+Run src/mqtt_subscriber_test.py FIRST in another terminal, then run this.
+
+Usage (real signals, recommended):
+    python src/realtime_inference_publisher.py --model-path models/ecg_model_int8_static.onnx --signals-path models/demo_signals.npz
+
+Usage (dummy input, connectivity test only):
     python src/realtime_inference_publisher.py --model-path models/ecg_model_fp32.onnx
 """
 
@@ -26,6 +31,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
 # Deliberately NOT importing from src.data_loader here -- that module pulls
 # in pandas, wfdb, sklearn (training-only dependencies). This publisher only
 # needs the tiny bit of config.yaml under 'edge:', so we read it directly
@@ -35,14 +41,20 @@ def load_edge_config() -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-# Placeholder until class_to_idx is wired in from a real dataset scan --
-# order must match your config.yaml label_mapping's top-4 classes.
-CLASS_NAMES = ["Sinus Bradycardia", "Sinus Rhythm", "Atrial Fibrillation", "GSVT"]
+
+def load_demo_signals(signals_path: Path):
+    """Loads the .npz produced by export_demo_signals.py. Only needs
+    numpy -- no pandas/wfdb required on the Pi."""
+    data = np.load(signals_path, allow_pickle=False)
+    signals = data['signals']            # (N, 12, 5000) float32
+    labels = data['labels']              # (N,) int64
+    class_names = [str(c) for c in data['class_names']]
+    return signals, labels, class_names
 
 
 def generate_dummy_input(shape) -> np.ndarray:
-    """Stand-in for real ECG acquisition. Replace this with actual
-    signal capture once you're on the Pi with a real input source."""
+    """Fallback for a quick connectivity test when no real signals are
+    supplied. Not meaningful for demo purposes -- prefer --signals-path."""
     return np.random.randn(*shape).astype(np.float32)
 
 
@@ -59,7 +71,8 @@ def run_inference(session: ort.InferenceSession, input_name: str, x: np.ndarray)
     return pred_idx, confidence
 
 
-def main(model_path: str, num_cycles: int, interval_seconds: float, broker_override: str = None):
+def main(model_path: str, num_cycles: int, interval_seconds: float,
+         broker_override: str = None, signals_path: str = None):
     config = load_edge_config()
     edge_cfg = config.get('edge', {})
     broker = broker_override or edge_cfg.get('mqtt_broker', 'localhost')
@@ -76,6 +89,22 @@ def main(model_path: str, num_cycles: int, interval_seconds: float, broker_overr
     input_shape = session.get_inputs()[0].shape
     shape = [1 if isinstance(dim, str) else dim for dim in input_shape]
 
+    # Real signals if provided, otherwise dummy noise (connectivity test only).
+    signals = labels = class_names = None
+    if signals_path:
+        signals_path = Path(signals_path)
+        if not signals_path.is_absolute():
+            signals_path = PROJECT_ROOT / signals_path
+        print(f"Loading real demo signals: {signals_path}")
+        signals, labels, class_names = load_demo_signals(signals_path)
+        print(f"Loaded {len(signals)} real signals. Classes: {class_names}")
+        if num_cycles > len(signals):
+            print(f"Note: --cycles ({num_cycles}) > available signals ({len(signals)}); looping back to the start.")
+    else:
+        print("WARNING: no --signals-path given -- publishing random dummy input, "
+              "not real predictions. Use --signals-path for a meaningful demo.")
+        class_names = ["Sinus Bradycardia", "Sinus Rhythm", "Atrial Fibrillation", "GSVT"]
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     print(f"Connecting to broker at {broker}:{port}...")
     client.connect(broker, port, keepalive=60)
@@ -86,15 +115,26 @@ def main(model_path: str, num_cycles: int, interval_seconds: float, broker_overr
 
     try:
         for i in range(num_cycles):
-            x = generate_dummy_input(shape)
+            true_class = None
+            if signals is not None:
+                idx = i % len(signals)
+                x = signals[idx:idx+1]  # (1, 12, 5000), already the right shape
+                true_class = class_names[labels[idx]]
+            else:
+                x = generate_dummy_input(shape)
+
             pred_idx, confidence = run_inference(session, input_name, x)
-            pred_class = CLASS_NAMES[pred_idx] if pred_idx < len(CLASS_NAMES) else str(pred_idx)
+            pred_class = class_names[pred_idx] if pred_idx < len(class_names) else str(pred_idx)
 
             payload = {
                 "timestamp": datetime.now().isoformat(timespec='seconds'),
                 "predicted_class": pred_class,
                 "confidence": confidence,
             }
+            if true_class is not None:
+                payload["true_class"] = true_class
+                payload["correct"] = (pred_class == true_class)
+
             client.publish(topic, json.dumps(payload))
             print(f"Published: {payload}")
 
@@ -110,9 +150,12 @@ def main(model_path: str, num_cycles: int, interval_seconds: float, broker_overr
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Publish ONNX inference results over MQTT")
     parser.add_argument("--model-path", required=True, help="Path to .onnx model")
+    parser.add_argument("--signals-path", default=None,
+                         help="Path to .npz of real demo signals (from export_demo_signals.py). "
+                              "If omitted, falls back to random dummy input.")
     parser.add_argument("--cycles", type=int, default=10, help="Number of inference cycles")
     parser.add_argument("--interval", type=float, default=2.0, help="Seconds between cycles")
     parser.add_argument("--broker", default=None,
                          help="Override the broker host from config.yaml (e.g. your PC's IP when running from the Pi)")
     args = parser.parse_args()
-    main(args.model_path, args.cycles, args.interval, args.broker)
+    main(args.model_path, args.cycles, args.interval, args.broker, args.signals_path)
