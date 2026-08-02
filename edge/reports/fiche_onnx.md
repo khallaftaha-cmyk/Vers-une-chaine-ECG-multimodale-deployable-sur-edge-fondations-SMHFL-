@@ -4,10 +4,11 @@
 
 | Champ | Valeur |
 |---|---|
-| Nom du modèle | `ecg_model_fp32.onnx` / `ecg_model_int8_dynamic.onnx` |
-| Dataset d'entraînement | Chapman-Shaoxing (WFDB) |
+| Modèles disponibles | `ecg_model_fp32.onnx`, `ecg_model_int8_dynamic.onnx`, `ecg_model_int8_static.onnx` |
+| Modèle recommandé pour déploiement | **`ecg_model_int8_static.onnx`** (voir §Quantification) |
+| Dataset d'entraînement | Chapman-Shaoxing (WFDB) — modèle placeholder en attendant le modèle d'Iman |
 | Opset ONNX | 17 |
-| Exporteur | `torch.onnx.export` (legacy TorchScript, `dynamo=False`) |
+| Exporteur | `torch.onnx.export` (legacy TorchScript, `dynamo=False` — voir Historique) |
 
 ## Architecture
 
@@ -47,31 +48,57 @@ Alignées avec le modèle d'Iman via le SNOMED-CT :
 
 ## Quantification
 
-- Méthode : **dynamique** (poids en INT8, activations en float, calculées à la volée)
-- Justification : pas de dataset de calibration nécessaire ; le BiLSTM est mieux géré en dynamique qu'en statique
-- Pré-traitement ONNX Runtime (`quant_pre_process`) appliqué avant quantification
+Deux approches testées :
 
-## Performance (PC, CPU)
-
-*À remplir avec les résultats de `benchmark_onnx.py` et `evaluate_onnx_accuracy.py` :*
-
-| Métrique | FP32 | INT8 |
+| | Dynamique | Statique |
 |---|---|---|
-| Taille modèle | 3.64 MB | 0.93 MB |
-| Latence moyenne | 18.01 ms | 41.88 ms |
-| Latence p95 | 20.68 ms | 45.29 ms |
-| Accuracy | 98.93% | 99.01% |
-| Macro F1 | 0.9885 | 0.9892 |
+| Ops quantifiés | MatMul, LSTM | Conv, Gemm, MatMul (**LSTM exclu**, support limité en statique) |
+| Calibration requise | Non | Oui (200 échantillons réels du train set) |
+| Réduction de taille | -74.3% | -12.3% |
+| Effet sur la latence | **Dégrade** (voir §Performance) | **Améliore** |
 
-## Performance (Raspberry Pi)
+**Recommandation : quantification statique.** La quantification dynamique réduit fortement la taille mais dégrade la latence sur PC ET sur Raspberry Pi 4, car (1) elle ne touche pas les couches Conv1d qui concentrent l'essentiel du calcul, et (2) le Cortex-A72 du Pi 4 (ARMv8.0) n'a pas d'accélération matérielle INT8 (SDOT/UDOT, disponible seulement à partir d'ARMv8.2/Cortex-A76), donc le surcoût de quantification/déquantification par appel n'est jamais compensé. La quantification statique cible les Conv (le vrai goulot de calcul) et exclut le BiLSTM, ce qui donne un gain réel de latence sur les deux plateformes, avec une perte d'accuracy négligeable.
 
-*À remplir en semaine 4, après déploiement sur cible.*
+Pré-traitement ONNX Runtime (`quant_pre_process`) appliqué avant les deux méthodes.
 
-| Métrique | Valeur |
-|---|---|
-| Latence moyenne | ___ ms |
-| Consommation | ___ |
+## Performance (PC, Windows CPU)
+
+| Métrique | FP32 | INT8 dynamique | INT8 statique |
+|---|---|---|---|
+| Taille modèle | 3.64 MB | 0.93 MB (-74.3%) | 3.19 MB (-12.3%) |
+| Latence moyenne | 18.01 ms | 41.88 ms (2.3x plus lent) | **15.57 ms (14% plus rapide)** |
+| Latence p95 | 20.68 ms | 45.29 ms | 18.42 ms |
+| Accuracy | 0.9893 | 0.9901 | 0.9893 |
+| Macro F1 | 0.9885 | 0.9892 (+0.0007) | 0.9873 (-0.0012) |
+
+## Performance (Raspberry Pi 4, aarch64)
+
+| Métrique | FP32 | INT8 dynamique | INT8 statique |
+|---|---|---|---|
+| Taille modèle | 3.64 MB | 0.93 MB | 3.19 MB |
+| Latence moyenne | 93.17 ms | 121.06 ms (1.3x plus lent) | **86.31 ms (1.08x plus rapide)** |
+| Latence p95 | 93.44 ms | 127.10 ms | 86.57 ms |
+| Throughput | 10.70 s/sec | 8.24 s/sec | 11.55 s/sec |
+| RAM | 71.24 MB | 74.16 MB | 75.95 MB |
+| Charge CPU moyenne | 99.5% | 100.0% | 100.0% |
+| Consommation électrique | *non mesurée — à faire* | | |
+
+**Contrainte temps réel :** 10s de signal ECG doivent être traités bien en-deçà de 10 000 ms. Les trois versions la respectent largement (latence max observée : 121 ms sur Pi 4).
+
+## Chaîne temps réel (MQTT)
+
+- Chaîne validée de bout en bout : Raspberry Pi 4 (inférence + publication) → broker Mosquitto (PC) → subscriber (PC), sur le réseau local.
+- Modèle utilisé : `ecg_model_int8_static.onnx`.
+- Chaque prédiction publiée inclut la classe prédite, la confiance, et (en mode démo) la classe réelle + indicateur correct/incorrect, à partir de signaux ECG réels du jeu de test (export via `export_demo_signals.py`, sans dépendance lourde côté Pi).
 
 ## Historique des changements
 
 - Correction du mapping SNOMED `426761007` : `Sinus Irregularity` → `GSVT`, pour aligner les classes avec le modèle d'Iman (voir échange avec Mme Bouayad).
+- Export ONNX : bascule vers l'exporteur legacy (`dynamo=False`) suite à une erreur de shape inference sur le BiLSTM (`Inferred shape and existing shape differ in dimension 0: (256) vs (128)`) avec l'exporteur dynamo par défaut.
+- Ajout de la quantification statique (Conv/Gemm/MatMul, LSTM exclu) suite à la dégradation de latence observée avec la quantification dynamique sur PC et Raspberry Pi 4.
+
+## Reste à faire
+
+- Mesure de la consommation électrique sur Raspberry Pi.
+- Bascule sur le modèle entraîné d'Iman dès disponibilité (interface déjà alignée sur les 4 classes).
+- Documentation de fidélité MBD (PyTorch → ONNX FP32 → ONNX INT8 statique → Pi réel).
