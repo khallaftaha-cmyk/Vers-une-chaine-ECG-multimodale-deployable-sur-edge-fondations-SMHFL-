@@ -48,6 +48,16 @@ model:
   lstm_num_layers: 2
   dropout: 0.3
   num_classes: 4    # Top-4 rhythm classes for simplification
+  # Class order matching class_to_idx from create_dataloaders(). This is
+  # the single source of truth for scripts that need class names but
+  # shouldn't import the full (pandas/wfdb-dependent) data pipeline --
+  # e.g. realtime_inference_publisher.py on the Raspberry Pi.
+  # Keep this in sync with the printed class_to_idx after each retrain.
+  classes:
+    - "Sinus Bradycardia"
+    - "Sinus Rhythm"
+    - "Atrial Fibrillation"
+    - "GSVT"
 
 # === Training ===
 training:

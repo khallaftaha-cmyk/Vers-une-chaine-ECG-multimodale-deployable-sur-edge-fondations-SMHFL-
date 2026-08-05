@@ -33,20 +33,20 @@ Ce projet constitue le **volet Edge** de la chaîne de classification ECG. L'obj
 │   │   └── config.yaml                     # Hyperparamètres, chemins, mapping SNOMED-CT, config MQTT
 │   ├── models/
 │   │   ├── best_model.pth                  # Poids du modèle PyTorch entraîné
-│   │   ├── ecg_model_fp32.onnx             # Modèle ONNX FP32 exporté
-│   │   ├── ecg_model_int8_dynamic.onnx     # Modèle ONNX quantifié INT8 (dynamique)
-│   │   ├── ecg_model_int8_static.onnx      # Modèle ONNX quantifié INT8 (statique) — recommandé
+│   │   ├── (T)ecg_model_fp32.onnx             # Modèle ONNX FP32 exporté
+│   │   ├── (T)ecg_model_int8_dynamic.onnx     # Modèle ONNX quantifié INT8 (dynamique)
+│   │   ├── (T)ecg_model_int8_static.onnx      # Modèle ONNX quantifié INT8 (statique) — recommandé
 │   │   └── demo_signals.npz                # Signaux ECG réels pour la démo temps réel (Pi)
 │   ├── notebooks/
 │   │   └── 01_ecg_onboarding.py            # Script d'exploration et onboarding ECG
 │   ├── reports/
-│   │   ├── accuracy_comparison_dynamique.md          # Précision/F1 — FP32 vs INT8 dynamique
-│   │   ├── accuracy_comparison_static.md   # Précision/F1 — FP32 vs INT8 statique
-│   │   ├── benchmark_ecg_model_fp32.md     # Benchmark PC — FP32
-│   │   ├── benchmark_ecg_model_int8_dynamic.md  # Benchmark PC — INT8 dynamique
-│   │   ├── benchmark_ecg_model_int8_static.md   # Benchmark PC — INT8 statique
-│   │   ├── raspberry_pi_benchmark_dynamique.md       # Benchmark matériel Pi 4 — FP32 vs INT8 dynamique
-│   │   ├── raspberry_pi_benchmark_static.md# Benchmark matériel Pi 4 — FP32 vs INT8 statique
+│   │   ├── (T)accuracy_comparison_dynamique.md          # Précision/F1 — FP32 vs INT8 dynamique
+│   │   ├── (T)accuracy_comparison_static.md   # Précision/F1 — FP32 vs INT8 statique
+│   │   ├── (T)benchmark_ecg_model_fp32.md     # Benchmark PC — FP32
+│   │   ├── (T)benchmark_ecg_model_int8_dynamic.md  # Benchmark PC — INT8 dynamique
+│   │   ├── (T)benchmark_ecg_model_int8_static.md   # Benchmark PC — INT8 statique
+│   │   ├── (T)raspberry_pi_benchmark_dynamique.md       # Benchmark matériel Pi 4 — FP32 vs INT8 dynamique
+│   │   ├── (T)raspberry_pi_benchmark_static.md# Benchmark matériel Pi 4 — FP32 vs INT8 statique
 │   │   └── fiche_onnx.md                   # Fiche technique du modèle ONNX (interface avec Iman)
 │   ├── scripts/
 │   │   └── extract_dataset.py              # Extraction du dataset WFDB

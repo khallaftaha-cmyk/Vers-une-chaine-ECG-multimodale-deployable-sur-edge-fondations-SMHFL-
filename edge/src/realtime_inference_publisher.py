@@ -9,6 +9,16 @@ whether each prediction was actually correct, live.
 Falls back to random dummy input (the old behavior) if no --signals-path
 is given, e.g. for a quick connectivity smoke test.
 
+Class names come from configs/config.yaml's model.classes (single source
+of truth) when --signals-path isn't given. When real signals ARE given,
+export_demo_signals.py's own class_names (baked into the .npz from the
+real class_to_idx at export time) take priority, since that's the most
+authoritative ordering available.
+
+Includes automatic MQTT reconnection: if the broker connection drops
+mid-run (Wi-Fi hiccup, broker restart, etc.), the publisher retries with
+backoff instead of crashing the whole demo.
+
 Run src/mqtt_subscriber_test.py FIRST in another terminal, then run this.
 
 Usage (real signals, recommended):
@@ -34,9 +44,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Deliberately NOT importing from src.data_loader here -- that module pulls
 # in pandas, wfdb, sklearn (training-only dependencies). This publisher only
-# needs the tiny bit of config.yaml under 'edge:', so we read it directly
-# with PyYAML. Keeps the Pi's install lightweight (matches requirements_pi.txt).
-def load_edge_config() -> dict:
+# needs config.yaml itself, so we read it directly with PyYAML. Keeps the
+# Pi's install lightweight (matches requirements_pi.txt).
+def load_config() -> dict:
     config_path = PROJECT_ROOT / 'configs' / 'config.yaml'
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
@@ -71,13 +81,27 @@ def run_inference(session: ort.InferenceSession, input_name: str, x: np.ndarray)
     return pred_idx, confidence
 
 
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        print("MQTT connected.")
+    else:
+        print(f"MQTT connect failed, reason code: {reason_code}")
+
+
+def on_disconnect(client, userdata, flags, reason_code, properties=None):
+    if reason_code != 0:
+        print(f"MQTT disconnected unexpectedly (reason code: {reason_code}). "
+              f"paho will auto-reconnect with backoff...")
+
+
 def main(model_path: str, num_cycles: int, interval_seconds: float,
          broker_override: str = None, signals_path: str = None):
-    config = load_edge_config()
+    config = load_config()
     edge_cfg = config.get('edge', {})
     broker = broker_override or edge_cfg.get('mqtt_broker', 'localhost')
     port = edge_cfg.get('mqtt_port', 1883)
     topic = edge_cfg.get('mqtt_topic', 'ecg/inference')
+    config_classes = config.get('model', {}).get('classes', [])
 
     model_path = Path(model_path)
     if not model_path.is_absolute():
@@ -90,25 +114,41 @@ def main(model_path: str, num_cycles: int, interval_seconds: float,
     shape = [1 if isinstance(dim, str) else dim for dim in input_shape]
 
     # Real signals if provided, otherwise dummy noise (connectivity test only).
-    signals = labels = class_names = None
+    signals = labels = None
     if signals_path:
         signals_path = Path(signals_path)
         if not signals_path.is_absolute():
             signals_path = PROJECT_ROOT / signals_path
         print(f"Loading real demo signals: {signals_path}")
-        signals, labels, class_names = load_demo_signals(signals_path)
+        signals, labels, npz_class_names = load_demo_signals(signals_path)
+        class_names = npz_class_names  # most authoritative: baked in at export time
         print(f"Loaded {len(signals)} real signals. Classes: {class_names}")
+        if config_classes and config_classes != npz_class_names:
+            print(f"WARNING: config.yaml's model.classes {config_classes} does not match "
+                  f"the .npz's class_names {npz_class_names} -- config.yaml may be stale.")
         if num_cycles > len(signals):
             print(f"Note: --cycles ({num_cycles}) > available signals ({len(signals)}); looping back to the start.")
     else:
+        if not config_classes:
+            print("ERROR: no --signals-path given AND configs/config.yaml has no model.classes defined. "
+                  "Can't determine class names. Add model.classes to config.yaml or pass --signals-path.")
+            sys.exit(1)
         print("WARNING: no --signals-path given -- publishing random dummy input, "
               "not real predictions. Use --signals-path for a meaningful demo.")
-        class_names = ["Sinus Bradycardia", "Sinus Rhythm", "Atrial Fibrillation", "GSVT"]
+        class_names = config_classes
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.reconnect_delay_set(min_delay=1, max_delay=30)  # backoff on dropped connections
+
     print(f"Connecting to broker at {broker}:{port}...")
-    client.connect(broker, port, keepalive=60)
-    client.loop_start()
+    try:
+        client.connect(broker, port, keepalive=60)
+    except Exception as e:
+        print(f"Initial connection failed: {e}")
+        sys.exit(1)
+    client.loop_start()  # background thread also handles auto-reconnect
 
     print(f"Publishing to topic '{topic}'. Running {num_cycles} cycle(s), "
           f"{interval_seconds}s apart. Press Ctrl+C to stop early.\n")
@@ -135,7 +175,10 @@ def main(model_path: str, num_cycles: int, interval_seconds: float,
                 payload["true_class"] = true_class
                 payload["correct"] = (pred_class == true_class)
 
-            client.publish(topic, json.dumps(payload))
+            result = client.publish(topic, json.dumps(payload))
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                print(f"WARNING: publish failed (rc={result.rc}) -- message may be lost, "
+                      f"will keep trying on subsequent cycles.")
             print(f"Published: {payload}")
 
             if i < num_cycles - 1:

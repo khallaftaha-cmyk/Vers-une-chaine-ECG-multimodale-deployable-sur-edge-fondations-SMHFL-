@@ -93,76 +93,80 @@ def measure_single_model(model_path: str, num_warmup: int = 10, num_runs: int = 
         cpu_percents.append(psutil.cpu_percent(interval=None))
 
     total_time_sec = time.perf_counter() - start_total
-    throughput = num_runs / total_time_sec
 
-    # Memory after inference
-    ram_final_mb = process.memory_info().rss / (1024 * 1024)
+def generate_comparison_report(results: Dict[str, Dict], hw_info: Dict, output_report_path: str):
+    """Generates a structured markdown report comparing however many model
+    variants were passed in (2-way FP32/INT8 or 3-way FP32/dynamic/static)."""
+    labels = list(results.keys())
+    baseline_label = labels[0]  # first one given is treated as the baseline (usually FP32)
+    baseline = results[baseline_label]
 
-    return {
-        'model_path': model_path,
-        'size_mb': size_mb,
-        'input_shape': input_shape,
-        'output_shape': [1 if type(dim) == str else dim for dim in output_tensor.shape],
-        'throughput': throughput,
-        'latency_mean_ms': float(np.mean(latencies_ms)),
-        'latency_std_ms': float(np.std(latencies_ms)),
-        'latency_min_ms': float(np.min(latencies_ms)),
-        'latency_max_ms': float(np.max(latencies_ms)),
-        'latency_p50_ms': float(np.median(latencies_ms)),
-        'latency_p95_ms': float(np.percentile(latencies_ms, 95)),
-        'latency_p99_ms': float(np.percentile(latencies_ms, 99)),
-        'ram_model_mb': model_ram_mb,
-        'ram_peak_mb': ram_final_mb,
-        'avg_cpu_percent': float(np.mean(cpu_percents))
-    }
+    header_row = "| Metric | " + " | ".join(f"{l} Model" for l in labels) + " |"
+    sep_row = "|---" * (len(labels) + 1) + "|"
 
+    def fmt_row(name, key, fmt="{:.2f}", suffix=""):
+        cells = [fmt.format(results[l][key]) + suffix for l in labels]
+        return f"| **{name}** | " + " | ".join(cells) + " |"
 
-def generate_comparison_report(fp32_res: Dict, int8_res: Dict, hw_info: Dict, output_report_path: str):
-    """Generates a structured markdown report comparing FP32 and INT8 models on target hardware."""
-    size_reduction_pct = ((fp32_res['size_mb'] - int8_res['size_mb']) / fp32_res['size_mb']) * 100
-    speedup_ratio = fp32_res['latency_mean_ms'] / int8_res['latency_mean_ms']
+    size_reduction_lines = []
+    speedup_lines = []
+    for l in labels[1:]:
+        red = ((baseline['size_mb'] - results[l]['size_mb']) / baseline['size_mb']) * 100
+        speedup = baseline['latency_mean_ms'] / results[l]['latency_mean_ms']
+        size_reduction_lines.append(f"- **{l} vs {baseline_label} size:** {red:+.1f}%")
+        direction = "speedup" if speedup >= 1 else "slowdown"
+        speedup_lines.append(f"- **{l} vs {baseline_label} latency:** {speedup:.2f}x {direction}")
 
-    report_content = f"""# 🍓 Raspberry Pi / Edge Benchmark Report
+    summary_table = "\n".join([
+        header_row, sep_row,
+        fmt_row("Model Size", "size_mb", "{:.2f}", " MB"),
+        fmt_row("Mean Latency", "latency_mean_ms", "{:.2f}", " ms"),
+        fmt_row("P95 Latency", "latency_p95_ms", "{:.2f}", " ms"),
+        fmt_row("P99 Latency", "latency_p99_ms", "{:.2f}", " ms"),
+        fmt_row("Throughput", "throughput", "{:.2f}", " s/sec"),
+        fmt_row("RAM Footprint", "ram_peak_mb", "{:.2f}", " MB"),
+        fmt_row("Avg CPU Load", "avg_cpu_percent", "{:.1f}", "%"),
+    ])
 
-**Date of Execution:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}  
-**Target Device:** `{hw_info['system']} ({hw_info['machine']})` — `{hw_info['processor']}`  
-**CPU Cores:** Physical: `{hw_info['cpu_count_physical']}`, Logical: `{hw_info['cpu_count_logical']}`  
-**Total System RAM:** `{hw_info['total_ram_gb']}`  
-**ONNX Runtime Version:** `{ort.__version__}`  
+    detail_sections = []
+    for l in labels:
+        r = results[l]
+        detail_sections.append(f"""### {l} Model (`{r['model_path']}`)
+- **Input Shape:** `{r['input_shape']}`
+- **Output Shape:** `{r['output_shape']}`
+- **Min / Max Latency:** `{r['latency_min_ms']:.2f} ms` / `{r['latency_max_ms']:.2f} ms`
+""")
 
----
+    fastest_label = min(labels, key=lambda l: results[l]['latency_mean_ms'])
+    smallest_label = min(labels, key=lambda l: results[l]['size_mb'])
 
-## 📊 Performance Comparison Summary
+    report_content = f"""# Raspberry Pi / Edge Benchmark Report
 
-| Metric | FP32 Model | INT8 Quantized Model | Difference / Gain |
-|---|---|---|---|
-| **Model Size** | `{fp32_res['size_mb']:.2f} MB` | `{int8_res['size_mb']:.2f} MB` | **-{size_reduction_pct:.1f}%** |
-| **Mean Latency** | `{fp32_res['latency_mean_ms']:.2f} ms` | `{int8_res['latency_mean_ms']:.2f} ms` | **{speedup_ratio:.2f}x speedup** |
-| **P95 Latency** | `{fp32_res['latency_p95_ms']:.2f} ms` | `{int8_res['latency_p95_ms']:.2f} ms` | — |
-| **P99 Latency** | `{fp32_res['latency_p99_ms']:.2f} ms` | `{int8_res['latency_p99_ms']:.2f} ms` | — |
-| **Throughput** | `{fp32_res['throughput']:.2f} s/sec` | `{int8_res['throughput']:.2f} s/sec` | — |
-| **RAM Footprint** | `{fp32_res['ram_peak_mb']:.2f} MB` | `{int8_res['ram_peak_mb']:.2f} MB` | — |
-| **Avg CPU Load** | `{fp32_res['avg_cpu_percent']:.1f}%` | `{int8_res['avg_cpu_percent']:.1f}%` | — |
-
----
-
-## 🔍 Detailed Model Breakdown
-
-### 1. FP32 Model (`{fp32_res['model_path']}`)
-- **Input Shape:** `{fp32_res['input_shape']}` (12 leads, 5000 samples @ 500Hz)
-- **Output Shape:** `{fp32_res['output_shape']}` (4 classes)
-- **Min / Max Latency:** `{fp32_res['latency_min_ms']:.2f} ms` / `{fp32_res['latency_max_ms']:.2f} ms`
-
-### 2. INT8 Dynamic Quantized Model (`{int8_res['model_path']}`)
-- **Input Shape:** `{int8_res['input_shape']}`
-- **Output Shape:** `{int8_res['output_shape']}`
-- **Min / Max Latency:** `{int8_res['latency_min_ms']:.2f} ms` / `{int8_res['latency_max_ms']:.2f} ms`
+**Date of Execution:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Target Device:** `{hw_info['system']} ({hw_info['machine']})` -- `{hw_info['processor']}`
+**CPU Cores:** Physical: `{hw_info['cpu_count_physical']}`, Logical: `{hw_info['cpu_count_logical']}`
+**Total System RAM:** `{hw_info['total_ram_gb']}`
+**ONNX Runtime Version:** `{ort.__version__}`
 
 ---
 
-## 🎯 Key Findings & Edge Suitability
-- **Real-Time Requirement:** 10 seconds of 12-lead ECG data is processed in **`{int8_res['latency_mean_ms']:.2f} ms`** (well below the 10,000 ms real-time window constraint).
-- **Storage & Memory Efficiency:** Model size reduced from `{fp32_res['size_mb']:.2f} MB` to `{int8_res['size_mb']:.2f} MB`.
+## Performance Comparison Summary
+
+{summary_table}
+
+---
+
+## Detailed Model Breakdown
+
+{"".join(detail_sections)}
+---
+
+## Key Findings & Edge Suitability
+- **Real-Time Requirement:** all variants processed 10s of 12-lead ECG data well below the 10,000 ms real-time window constraint.
+- **Fastest variant:** {fastest_label} ({results[fastest_label]['latency_mean_ms']:.2f} ms mean latency)
+- **Smallest variant:** {smallest_label} ({results[smallest_label]['size_mb']:.2f} MB)
+{chr(10).join(size_reduction_lines)}
+{chr(10).join(speedup_lines)}
 """
 
     os.makedirs(os.path.dirname(output_report_path), exist_ok=True)
@@ -175,7 +179,8 @@ def generate_comparison_report(fp32_res: Dict, int8_res: Dict, hw_info: Dict, ou
 def main():
     parser = argparse.ArgumentParser(description="Raspberry Pi ONNX Hardware Benchmark")
     parser.add_argument("--fp32-model", type=str, default="edge/models/ecg_model_fp32.onnx", help="Path to FP32 ONNX model")
-    parser.add_argument("--int8-model", type=str, default="edge/models/ecg_model_int8_dynamic.onnx", help="Path to INT8 ONNX model")
+    parser.add_argument("--int8-model", type=str, default=None, help="Path to INT8 dynamic ONNX model (optional)")
+    parser.add_argument("--static-model", type=str, default=None, help="Path to INT8 static ONNX model (optional)")
     parser.add_argument("--runs", type=int, default=100, help="Number of benchmark iterations")
     parser.add_argument("--warmup", type=int, default=10, help="Number of warmup iterations")
     parser.add_argument("--output-report", type=str, default="edge/reports/raspberry_pi_benchmark.md", help="Output report path")
@@ -192,16 +197,31 @@ def main():
     print(f"CPU Cores:    {hw_info['cpu_count_physical']} physical ({hw_info['cpu_count_logical']} logical)")
     print(f"Total RAM:    {hw_info['total_ram_gb']}")
 
-    print("\n--- 1. Benchmarking FP32 Model ---")
-    fp32_res = measure_single_model(args.fp32_model, num_warmup=args.warmup, num_runs=args.runs)
-    print(f"Size: {fp32_res['size_mb']:.2f} MB | Latency: {fp32_res['latency_mean_ms']:.2f} ms | Throughput: {fp32_res['throughput']:.2f} samples/s")
+    # Benchmark whichever model paths were actually provided -- lets you run
+    # a quick 2-way FP32-vs-one-variant check, or the full 3-way comparison,
+    # from the same script and the same command shape.
+    model_args = [
+        ("FP32", args.fp32_model),
+        ("INT8 Dynamic", args.int8_model),
+        ("INT8 Static", args.static_model),
+    ]
+    results = {}
+    step = 1
+    for label, path in model_args:
+        if path is None:
+            continue
+        print(f"\n--- {step}. Benchmarking {label} Model ---")
+        res = measure_single_model(path, num_warmup=args.warmup, num_runs=args.runs)
+        print(f"Size: {res['size_mb']:.2f} MB | Latency: {res['latency_mean_ms']:.2f} ms | Throughput: {res['throughput']:.2f} samples/s")
+        results[label] = res
+        step += 1
 
-    print("\n--- 2. Benchmarking INT8 Quantized Model ---")
-    int8_res = measure_single_model(args.int8_model, num_warmup=args.warmup, num_runs=args.runs)
-    print(f"Size: {int8_res['size_mb']:.2f} MB | Latency: {int8_res['latency_mean_ms']:.2f} ms | Throughput: {int8_res['throughput']:.2f} samples/s")
+    if len(results) < 2:
+        print("\nNeed at least 2 models to compare (got "
+              f"{len(results)}). Provide --int8-model and/or --static-model.")
+        sys.exit(1)
 
-    # Generate Report
-    generate_comparison_report(fp32_res, int8_res, hw_info, args.output_report)
+    generate_comparison_report(results, hw_info, args.output_report)
 
 
 if __name__ == "__main__":
