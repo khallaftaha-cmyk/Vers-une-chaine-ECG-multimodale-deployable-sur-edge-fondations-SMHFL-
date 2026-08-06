@@ -59,10 +59,16 @@ def validate(model_path: str) -> bool:
 
     # Opset
     opset = model.opset_import[0].version if model.opset_import else None
-    check(opset is not None and opset >= min_opset,
-          f"Opset version {opset} (>= {min_opset})",
-          f"Opset version {opset} is below required minimum {min_opset}",
-          failures)
+    # Opset. Note: opset 17 was needed for OUR model's BiLSTM symbolic
+    # shape inference specifically (see quantize_onnx.py) -- not a
+    # universal ONNX interoperability requirement. A lower opset from a
+    # different model/framework may quantize and run just fine; this is
+    # informational, not a hard blocker.
+    if opset is not None and opset >= min_opset:
+        print(f"  [OK]   Opset version {opset} (>= {min_opset})")
+    else:
+        print(f"  [INFO] Opset version {opset} is below {min_opset} -- our BiLSTM export needed 17+, "
+              f"but this may be unrelated to this model. Test quantization directly rather than assuming it'll fail.")
 
     # Input
     inputs = model.graph.input
@@ -70,14 +76,26 @@ def validate(model_path: str) -> bool:
           f"Expected exactly 1 input, found {len(inputs)}", failures)
     if inputs:
         inp = inputs[0]
-        check(inp.name == 'ecg_input', f"Input name is 'ecg_input'",
-              f"Input name is '{inp.name}', expected 'ecg_input'", failures)
+        if inp.name == 'ecg_input':
+            print(f"  [OK]   Input name is 'ecg_input'")
+        else:
+            print(f"  [INFO] Input name is '{inp.name}' (expected 'ecg_input' -- "
+                  f"not blocking, just a naming difference)")
         dims = inp.type.tensor_type.shape.dim
         dim_values = [d.dim_value if d.dim_value > 0 else d.dim_param for d in dims]
-        expected_shape = ['batch_size', expected_leads, expected_seq_len]
-        shape_ok = (len(dim_values) == 3 and dim_values[1] == expected_leads and dim_values[2] == expected_seq_len)
-        check(shape_ok, f"Input shape {dim_values} matches (batch, {expected_leads}, {expected_seq_len})",
-              f"Input shape {dim_values} does NOT match expected (batch, {expected_leads}, {expected_seq_len})", failures)
+        int_dims = [d for d in dim_values if isinstance(d, int)]
+        channels_first = int_dims == [expected_leads, expected_seq_len]
+        channels_last = int_dims == [expected_seq_len, expected_leads]
+        if channels_first:
+            print(f"  [OK]   Input shape {dim_values} -- channels-first (batch, {expected_leads}, {expected_seq_len})")
+        elif channels_last:
+            print(f"  [OK]   Input shape {dim_values} -- channels-last (batch, {expected_seq_len}, {expected_leads}) "
+                  f"[Keras/TF convention -- handled automatically by onnx_io_utils.prepare_input()]")
+        else:
+            msg = (f"Input shape {dim_values} matches NEITHER (batch, {expected_leads}, {expected_seq_len}) "
+                   f"nor (batch, {expected_seq_len}, {expected_leads})")
+            print(f"  [FAIL] {msg}")
+            failures.append(msg)
 
     # Output
     outputs = model.graph.output
@@ -85,8 +103,11 @@ def validate(model_path: str) -> bool:
           f"Expected exactly 1 output, found {len(outputs)}", failures)
     if outputs:
         out = outputs[0]
-        check(out.name == 'classification', f"Output name is 'classification'",
-              f"Output name is '{out.name}', expected 'classification'", failures)
+        if out.name == 'classification':
+            print(f"  [OK]   Output name is 'classification'")
+        else:
+            print(f"  [INFO] Output name is '{out.name}' (expected 'classification' -- "
+                  f"NOT blocking: our scripts read outputs positionally, not by name)")
         dims = out.type.tensor_type.shape.dim
         dim_values = [d.dim_value if d.dim_value > 0 else d.dim_param for d in dims]
         shape_ok = (len(dim_values) == 2 and dim_values[1] == expected_num_classes)

@@ -24,6 +24,11 @@ import numpy as np
 import onnxruntime as ort
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.onnx_io_utils import load_adaptive_session, prepare_input
+
 REPORTS_DIR = PROJECT_ROOT / 'reports'
 
 
@@ -47,8 +52,9 @@ def compare_stage(ref_logits: np.ndarray, other_logits: np.ndarray, ref_name: st
 
 
 def run_onnx_on_signals(signals: np.ndarray, onnx_path: Path) -> np.ndarray:
-    session = ort.InferenceSession(str(onnx_path), providers=['CPUExecutionProvider'])
-    input_name = session.get_inputs()[0].name
+    session, input_name, orientation = load_adaptive_session(onnx_path)
+    print(f"  ({onnx_path.name}: detected {orientation} input)")
+    signals = prepare_input(signals, orientation)  # transposed only if this model needs it
     outputs = []
     for i in range(signals.shape[0]):
         out = session.run(None, {input_name: signals[i:i+1]})[0]

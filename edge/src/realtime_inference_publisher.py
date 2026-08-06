@@ -40,6 +40,12 @@ import paho.mqtt.client as mqtt
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# onnx_io_utils only needs numpy/onnxruntime -- safe to import on the Pi,
+# unlike src.data_loader (pandas/wfdb/sklearn).
+from src.onnx_io_utils import detect_orientation, prepare_input
 
 
 # Deliberately NOT importing from src.data_loader here -- that module pulls
@@ -112,6 +118,8 @@ def main(model_path: str, num_cycles: int, interval_seconds: float,
     input_name = session.get_inputs()[0].name
     input_shape = session.get_inputs()[0].shape
     shape = [1 if isinstance(dim, str) else dim for dim in input_shape]
+    orientation = detect_orientation(session)
+    print(f"Detected model input orientation: {orientation}")
 
     # Real signals if provided, otherwise dummy noise (connectivity test only).
     signals = labels = None
@@ -158,7 +166,8 @@ def main(model_path: str, num_cycles: int, interval_seconds: float,
             true_class = None
             if signals is not None:
                 idx = i % len(signals)
-                x = signals[idx:idx+1]  # (1, 12, 5000), already the right shape
+                x = signals[idx:idx+1]           # (1, 12, 5000) -- canonical
+                x = prepare_input(x, orientation)  # transposed only if this model needs it
                 true_class = class_names[labels[idx]]
             else:
                 x = generate_dummy_input(shape)

@@ -15,6 +15,10 @@ your dynamic-quantization script already documented this same caveat.
 So: Conv layers get quantized (the actual latency driver), LSTM stays
 FP32 (the accuracy-sensitive, poorly-supported part).
 
+Works with models from either framework/orientation via
+onnx_io_utils' automatic orientation detection -- calibration signals
+are transposed to match whatever the target model actually expects.
+
 Usage:
     python src/quantize_onnx_static.py --model-path models/ecg_model_fp32.onnx --num-calibration-samples 200
 """
@@ -37,6 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_loader import load_config, create_dataloaders
+from src.onnx_io_utils import detect_orientation, prepare_input
 
 
 class ECGCalibrationDataReader(CalibrationDataReader):
@@ -45,15 +50,17 @@ class ECGCalibrationDataReader(CalibrationDataReader):
     any test-set information into the quantization parameters --
     calibration is model prep, not evaluation."""
 
-    def __init__(self, train_loader, input_name: str, num_samples: int):
+    def __init__(self, train_loader, input_name: str, num_samples: int, orientation: str):
         self.input_name = input_name
         self.num_samples = num_samples
+        self.orientation = orientation
         self._iterator = self._build_iterator(train_loader)
 
     def _build_iterator(self, train_loader):
         count = 0
         for signals, _labels in train_loader:
-            x = signals.numpy().astype(np.float32)
+            x = signals.numpy().astype(np.float32)   # (batch, 12, 5000) -- canonical
+            x = prepare_input(x, self.orientation)     # transposed only if this model needs it
             for i in range(x.shape[0]):
                 if count >= self.num_samples:
                     return
@@ -71,6 +78,8 @@ def quantize_static_model(model_path: str, num_calibration_samples: int, output_
 
     if output_path is None:
         output_name = model_path.name.replace('fp32', 'int8_static')
+        if output_name == model_path.name:  # e.g. Iman's file has no "fp32" in the name
+            output_name = model_path.stem + '_int8_static.onnx'
         output_path = model_path.parent / output_name
     output_path = Path(output_path)
     if not output_path.is_absolute():
@@ -100,8 +109,10 @@ def quantize_static_model(model_path: str, num_calibration_samples: int, output_
     import onnxruntime as ort
     probe_session = ort.InferenceSession(str(preprocessed_path), providers=['CPUExecutionProvider'])
     input_name = probe_session.get_inputs()[0].name
+    orientation = detect_orientation(probe_session)
+    print(f"Detected target model input orientation: {orientation}")
 
-    calibration_reader = ECGCalibrationDataReader(train_loader, input_name, num_calibration_samples)
+    calibration_reader = ECGCalibrationDataReader(train_loader, input_name, num_calibration_samples, orientation)
 
     print(f"Running static quantization -> {output_path}")
     print("Quantizing Conv/Gemm/MatMul only -- LSTM stays FP32.")

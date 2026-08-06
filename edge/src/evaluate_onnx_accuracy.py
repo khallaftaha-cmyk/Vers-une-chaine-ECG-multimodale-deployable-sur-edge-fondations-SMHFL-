@@ -3,6 +3,10 @@ INT8 ONNX models on your actual held-out test set. This is the piece
 the placeholder model could never give you -- it had no real labels, so
 "accuracy" wasn't measurable. Now it is.
 
+Works with models from either framework/orientation (your own PyTorch
+channels-first models, or Iman's Keras channels-last model) via
+onnx_io_utils' automatic orientation detection.
+
 Usage:
     python src/evaluate_onnx_accuracy.py --fp32 models/ecg_model_fp32.onnx --int8 models/ecg_model_int8_dynamic.onnx
 """
@@ -11,7 +15,6 @@ import sys
 import argparse
 from pathlib import Path
 import numpy as np
-import onnxruntime as ort
 from sklearn.metrics import f1_score, accuracy_score, classification_report
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -19,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_loader import load_config, create_dataloaders
+from src.onnx_io_utils import load_adaptive_session, prepare_input
 
 REPORTS_DIR = PROJECT_ROOT / 'reports'
 
@@ -28,13 +32,14 @@ def evaluate_onnx_model(onnx_path: str, test_loader):
     if not onnx_path.is_absolute():
         onnx_path = PROJECT_ROOT / onnx_path
 
-    sess = ort.InferenceSession(str(onnx_path), providers=['CPUExecutionProvider'])
-    input_name = sess.get_inputs()[0].name
+    session, input_name, orientation = load_adaptive_session(onnx_path)
+    print(f"  ({onnx_path.name}: detected {orientation} input)")
 
     all_preds, all_labels = [], []
     for signals, labels in test_loader:
-        x = signals.numpy().astype(np.float32)
-        logits = sess.run(None, {input_name: x})[0]
+        x = signals.numpy().astype(np.float32)   # (batch, 12, 5000) -- our canonical format
+        x = prepare_input(x, orientation)          # transposed only if this model needs it
+        logits = session.run(None, {input_name: x})[0]
         preds = np.argmax(logits, axis=1)
         all_preds.extend(preds.tolist())
         all_labels.extend(labels.numpy().tolist())

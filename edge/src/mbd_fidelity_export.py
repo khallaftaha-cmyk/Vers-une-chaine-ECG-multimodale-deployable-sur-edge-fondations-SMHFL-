@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.model import build_model
 from src.data_loader import load_config
+from src.onnx_io_utils import load_adaptive_session, prepare_input
 
 DEFAULT_SIGNALS = PROJECT_ROOT / 'models' / 'demo_signals.npz'
 DEFAULT_OUTPUT = PROJECT_ROOT / 'models' / 'mbd_reference.npz'
@@ -43,8 +44,9 @@ def run_pytorch(signals: np.ndarray, weights_path: Path, config: dict) -> np.nda
 
 
 def run_onnx(signals: np.ndarray, onnx_path: Path) -> np.ndarray:
-    session = ort.InferenceSession(str(onnx_path), providers=['CPUExecutionProvider'])
-    input_name = session.get_inputs()[0].name
+    session, input_name, orientation = load_adaptive_session(onnx_path)
+    print(f"  ({onnx_path.name}: detected {orientation} input)")
+    signals = prepare_input(signals, orientation)  # transposed only if this model needs it
     outputs = []
     for i in range(signals.shape[0]):
         out = session.run(None, {input_name: signals[i:i+1]})[0]
