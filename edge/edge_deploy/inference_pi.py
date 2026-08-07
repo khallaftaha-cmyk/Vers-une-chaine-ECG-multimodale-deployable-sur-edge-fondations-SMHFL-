@@ -93,6 +93,29 @@ def measure_single_model(model_path: str, num_warmup: int = 10, num_runs: int = 
         cpu_percents.append(psutil.cpu_percent(interval=None))
 
     total_time_sec = time.perf_counter() - start_total
+    throughput = num_runs / total_time_sec
+
+    # Memory after inference
+    ram_final_mb = process.memory_info().rss / (1024 * 1024)
+
+    return {
+        'model_path': model_path,
+        'size_mb': size_mb,
+        'input_shape': input_shape,
+        'output_shape': [1 if type(dim) == str else dim for dim in output_tensor.shape],
+        'throughput': throughput,
+        'latency_mean_ms': float(np.mean(latencies_ms)),
+        'latency_std_ms': float(np.std(latencies_ms)),
+        'latency_min_ms': float(np.min(latencies_ms)),
+        'latency_max_ms': float(np.max(latencies_ms)),
+        'latency_p50_ms': float(np.median(latencies_ms)),
+        'latency_p95_ms': float(np.percentile(latencies_ms, 95)),
+        'latency_p99_ms': float(np.percentile(latencies_ms, 99)),
+        'ram_model_mb': model_ram_mb,
+        'ram_peak_mb': ram_final_mb,
+        'avg_cpu_percent': float(np.mean(cpu_percents))
+    }
+
 
 def generate_comparison_report(results: Dict[str, Dict], hw_info: Dict, output_report_path: str):
     """Generates a structured markdown report comparing however many model
