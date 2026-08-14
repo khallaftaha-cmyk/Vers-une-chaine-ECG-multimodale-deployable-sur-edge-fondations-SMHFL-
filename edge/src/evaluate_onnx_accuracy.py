@@ -50,8 +50,16 @@ def evaluate_onnx_model(onnx_path: str, test_loader):
     return acc, macro_f1, report
 
 
-def main(fp32_path: str, int8_path: str):
+def main(fp32_path: str, int8_path: str, lowcut: float, highcut: float):
     config = load_config()
+    # Override bandpass cutoffs -- different models can require different
+    # preprocessing. Iman's fiche specifies 0.5-40 Hz; our own model used
+    # the config/preprocessing.py default of 0.5-45 Hz. Mismatching this
+    # produces near-zero accuracy even on a genuinely good model.
+    config.setdefault('preprocessing', {})
+    config['preprocessing']['lowcut'] = lowcut
+    config['preprocessing']['highcut'] = highcut
+    print(f"Using bandpass filter: {lowcut}-{highcut} Hz")
     _, _, test_loader, class_to_idx = create_dataloaders(config)
 
     print("Evaluating FP32 model on test set...")
@@ -84,5 +92,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare FP32 vs INT8 ONNX accuracy")
     parser.add_argument("--fp32", required=True, help="Path to FP32 .onnx model")
     parser.add_argument("--int8", required=True, help="Path to INT8 .onnx model")
+    parser.add_argument("--lowcut", type=float, default=0.5, help="Bandpass lowcut Hz")
+    parser.add_argument("--highcut", type=float, default=45.0,
+                         help="Bandpass highcut Hz (our own model: 45.0 default; Iman's model requires 40.0 per her fiche)")
     args = parser.parse_args()
-    main(args.fp32, args.int8)
+    main(args.fp32, args.int8, args.lowcut, args.highcut)

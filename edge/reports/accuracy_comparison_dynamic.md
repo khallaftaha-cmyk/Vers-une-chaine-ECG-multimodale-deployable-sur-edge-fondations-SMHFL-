@@ -5,9 +5,9 @@ Class mapping: `{'Sinus Bradycardia': 0, 'Sinus Rhythm': 1, 'Atrial Fibrillation
 | Model | Accuracy | Macro F1 |
 |---|---|---|
 | FP32 | 0.0066 | 0.0063 |
-| INT8 | 0.0066 | 0.0063 |
+| INT8 | 0.0058 | 0.0057 |
 
-**Macro F1 delta (INT8 - FP32):** +0.0000
+**Macro F1 delta (INT8 - FP32):** -0.0006
 
 ## FP32 classification report
 ```

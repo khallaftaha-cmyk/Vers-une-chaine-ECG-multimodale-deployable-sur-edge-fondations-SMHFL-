@@ -1,6 +1,6 @@
 # ONNX Benchmark Report
 
-**Date:** 2026-08-06 13:18:33  
+**Date:** 2026-08-14 20:50:46  
 **ONNX Runtime Version:** 1.27.0  
 **Model Path:** `models/chapman_ecg_model_int8_static.onnx`  
 
@@ -14,10 +14,10 @@
 ## Performance
 | Metric | Value |
 |---|---|
-| Throughput | 167.83 samples/sec |
-| Latency (Mean) | 6.96 ms |
-| Latency (Std) | 3.18 ms |
-| Latency (Min) | 5.34 ms |
-| Latency (Max) | 32.88 ms |
-| Latency (p95) | 8.27 ms |
-| Latency (p99) | 18.46 ms |
+| Throughput | 159.52 samples/sec |
+| Latency (Mean) | 6.24 ms |
+| Latency (Std) | 0.58 ms |
+| Latency (Min) | 5.28 ms |
+| Latency (Max) | 7.57 ms |
+| Latency (p95) | 7.27 ms |
+| Latency (p99) | 7.42 ms |

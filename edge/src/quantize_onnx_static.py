@@ -71,7 +71,8 @@ class ECGCalibrationDataReader(CalibrationDataReader):
         return next(self._iterator, None)
 
 
-def quantize_static_model(model_path: str, num_calibration_samples: int, output_path: str = None) -> str:
+def quantize_static_model(model_path: str, num_calibration_samples: int, output_path: str = None,
+                           lowcut: float = 0.5, highcut: float = 45.0) -> str:
     model_path = Path(model_path)
     if not model_path.is_absolute():
         model_path = PROJECT_ROOT / model_path
@@ -104,6 +105,13 @@ def quantize_static_model(model_path: str, num_calibration_samples: int, output_
     # Get real calibration data from the training set.
     print(f"Loading training data for calibration ({num_calibration_samples} samples)...")
     config = load_config()
+    # Different models can require different preprocessing -- calibration
+    # data must match whichever model is being quantized (see Iman's fiche:
+    # 0.5-40 Hz required, vs our own model's 0.5-45 Hz default).
+    config.setdefault('preprocessing', {})
+    config['preprocessing']['lowcut'] = lowcut
+    config['preprocessing']['highcut'] = highcut
+    print(f"Using bandpass filter for calibration: {lowcut}-{highcut} Hz")
     train_loader, _val_loader, _test_loader, _class_to_idx = create_dataloaders(config)
 
     import onnxruntime as ort
@@ -145,5 +153,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-calibration-samples", type=int, default=200,
                          help="Number of training samples to use for calibration")
     parser.add_argument("--output", default=None, help="Output path for statically quantized model")
+    parser.add_argument("--lowcut", type=float, default=0.5, help="Bandpass lowcut Hz for calibration data")
+    parser.add_argument("--highcut", type=float, default=45.0,
+                         help="Bandpass highcut Hz for calibration data (our own model: 45.0; Iman's model requires 40.0)")
     args = parser.parse_args()
-    quantize_static_model(args.model_path, args.num_calibration_samples, args.output)
+    quantize_static_model(args.model_path, args.num_calibration_samples, args.output, args.lowcut, args.highcut)

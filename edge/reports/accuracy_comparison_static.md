@@ -5,9 +5,9 @@ Class mapping: `{'Sinus Bradycardia': 0, 'Sinus Rhythm': 1, 'Atrial Fibrillation
 | Model | Accuracy | Macro F1 |
 |---|---|---|
 | FP32 | 0.0066 | 0.0063 |
-| INT8 | 0.0058 | 0.0049 |
+| INT8 | 0.0074 | 0.0077 |
 
-**Macro F1 delta (INT8 - FP32):** -0.0014
+**Macro F1 delta (INT8 - FP32):** +0.0014
 
 ## FP32 classification report
 ```
@@ -29,12 +29,12 @@ weighted avg       0.01      0.01      0.01      1213
               precision    recall  f1-score   support
 
            0       0.02      0.01      0.01       584
-           1       0.01      0.00      0.01       274
+           1       0.04      0.01      0.02       274
            2       0.00      0.00      0.00       267
            3       0.00      0.00      0.00        88
 
     accuracy                           0.01      1213
-   macro avg       0.01      0.00      0.00      1213
-weighted avg       0.01      0.01      0.01      1213
+   macro avg       0.01      0.01      0.01      1213
+weighted avg       0.02      0.01      0.01      1213
 
 ```

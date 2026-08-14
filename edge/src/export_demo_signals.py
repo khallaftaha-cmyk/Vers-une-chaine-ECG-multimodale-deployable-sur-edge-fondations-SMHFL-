@@ -28,8 +28,16 @@ from src.data_loader import load_config, create_dataloaders
 DEFAULT_OUTPUT = PROJECT_ROOT / 'models' / 'demo_signals.npz'
 
 
-def export_demo_signals(num_samples: int, output_path: Path = DEFAULT_OUTPUT):
+def export_demo_signals(num_samples: int, output_path: Path = DEFAULT_OUTPUT,
+                         lowcut: float = 0.5, highcut: float = 45.0):
     config = load_config()
+    # Different models can require different preprocessing -- e.g. Iman's
+    # fiche specifies 0.5-40 Hz bandpass, vs our own model's 0.5-45 Hz.
+    # Signals exported here must match whichever model will consume them.
+    config.setdefault('preprocessing', {})
+    config['preprocessing']['lowcut'] = lowcut
+    config['preprocessing']['highcut'] = highcut
+    print(f"Using bandpass filter: {lowcut}-{highcut} Hz")
     _train_loader, _val_loader, test_loader, class_to_idx = create_dataloaders(config)
 
     idx_to_class = {v: k for k, v in class_to_idx.items()}
@@ -68,6 +76,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export real ECG test signals for the Pi real-time demo")
     parser.add_argument("--num-samples", type=int, default=30, help="Number of signals to export")
     parser.add_argument("--output", type=str, default=None, help="Output .npz path")
+    parser.add_argument("--lowcut", type=float, default=0.5, help="Bandpass lowcut Hz")
+    parser.add_argument("--highcut", type=float, default=45.0,
+                         help="Bandpass highcut Hz (our own model: 45.0; Iman's model requires 40.0 per her fiche)")
     args = parser.parse_args()
     output = Path(args.output) if args.output else DEFAULT_OUTPUT
-    export_demo_signals(args.num_samples, output)
+    export_demo_signals(args.num_samples, output, args.lowcut, args.highcut)
