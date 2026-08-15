@@ -79,11 +79,20 @@ def softmax(logits: np.ndarray) -> np.ndarray:
     return exp / exp.sum()
 
 
-def run_inference(session: ort.InferenceSession, input_name: str, x: np.ndarray):
+def run_inference(session: ort.InferenceSession, input_name: str, x: np.ndarray, pred_permutation=None):
     logits = session.run(None, {input_name: x})[0][0]
-    probs = softmax(logits)
+    # Some models (e.g. Iman's -- softmax baked into the graph) already output
+    # probabilities summing to ~1.0. Re-applying softmax on top of that distorts
+    # the confidence value (though never the argmax/predicted class). Detect and
+    # skip the redundant softmax in that case.
+    if np.isclose(logits.sum(), 1.0, atol=1e-3) and np.all(logits >= -1e-6):
+        probs = logits
+    else:
+        probs = softmax(logits)
     pred_idx = int(np.argmax(probs))
     confidence = float(probs[pred_idx])
+    if pred_permutation is not None:
+        pred_idx = pred_permutation[pred_idx]
     return pred_idx, confidence
 
 
@@ -101,7 +110,7 @@ def on_disconnect(client, userdata, flags, reason_code, properties=None):
 
 
 def main(model_path: str, num_cycles: int, interval_seconds: float,
-         broker_override: str = None, signals_path: str = None):
+         broker_override: str = None, signals_path: str = None, pred_permutation=None):
     config = load_config()
     edge_cfg = config.get('edge', {})
     broker = broker_override or edge_cfg.get('mqtt_broker', 'localhost')
@@ -172,7 +181,7 @@ def main(model_path: str, num_cycles: int, interval_seconds: float,
             else:
                 x = generate_dummy_input(shape)
 
-            pred_idx, confidence = run_inference(session, input_name, x)
+            pred_idx, confidence = run_inference(session, input_name, x, pred_permutation)
             pred_class = class_names[pred_idx] if pred_idx < len(class_names) else str(pred_idx)
 
             payload = {
@@ -209,5 +218,9 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=float, default=2.0, help="Seconds between cycles")
     parser.add_argument("--broker", default=None,
                          help="Override the broker host from config.yaml (e.g. your PC's IP when running from the Pi)")
+    parser.add_argument("--pred-permutation", type=str, default=None,
+                         help="Comma-separated remap for a model whose real output index order doesn't "
+                              "match its documented order (Iman's model: '2,3,0,1', confirmed via confusion matrix)")
     args = parser.parse_args()
-    main(args.model_path, args.cycles, args.interval, args.broker, args.signals_path)
+    pred_permutation = [int(x) for x in args.pred_permutation.split(',')] if args.pred_permutation else None
+    main(args.model_path, args.cycles, args.interval, args.broker, args.signals_path, pred_permutation)

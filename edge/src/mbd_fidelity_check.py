@@ -62,7 +62,7 @@ def run_onnx_on_signals(signals: np.ndarray, onnx_path: Path) -> np.ndarray:
     return np.stack(outputs, axis=0)
 
 
-def main(reference_path: str, target_model: str, target_label: str):
+def main(reference_path: str, target_model: str, target_label: str, output_report: str = None):
     ref_path = Path(reference_path)
     if not ref_path.is_absolute():
         ref_path = PROJECT_ROOT / ref_path
@@ -70,14 +70,15 @@ def main(reference_path: str, target_model: str, target_label: str):
     signals = data['signals']
     labels = data['labels']
     class_names = [str(c) for c in data['class_names']]
-    pytorch_logits = data['pytorch_logits']
     fp32_logits = data['fp32_logits']
     static_logits = data['static_logits']
 
     comparisons = []
 
-    # Always compare the reference stages against each other (MIL vs SIL FP32, SIL FP32 vs SIL INT8 static)
-    comparisons.append(compare_stage(pytorch_logits, fp32_logits, "PyTorch (MIL)", "ONNX FP32 (SIL, PC)"))
+    # MIL vs SIL FP32 -- only if the reference has a PyTorch stage (skipped for
+    # cross-framework models like Iman's, which have no PyTorch equivalent).
+    if 'pytorch_logits' in data:
+        comparisons.append(compare_stage(data['pytorch_logits'], fp32_logits, "PyTorch (MIL)", "ONNX FP32 (SIL, PC)"))
     comparisons.append(compare_stage(fp32_logits, static_logits, "ONNX FP32 (SIL, PC)", "ONNX INT8 static (SIL, PC)"))
 
     # Optionally add a target platform (e.g. the Pi) actually running a model now
@@ -99,7 +100,7 @@ def main(reference_path: str, target_model: str, target_label: str):
         print(f"  Mean |logit diff|:    {c['mean_abs_logit_diff']:.6f}")
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_DIR / 'mbd_fidelity_report.md'
+    report_path = REPORTS_DIR / (output_report or 'mbd_fidelity_report.md')
     with open(report_path, 'w') as f:
         f.write("# MBD Fidelity Report (MIL / SIL / PIL)\n\n")
         f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -126,5 +127,8 @@ if __name__ == "__main__":
                               "against the PC reference (e.g. on the Pi, for PIL)")
     parser.add_argument("--target-label", default="Target platform (PIL)",
                          help="Label for the target platform in the report")
+    parser.add_argument("--output-report", default=None,
+                         help="Report filename under reports/ (default: mbd_fidelity_report.md; "
+                              "use e.g. mbd_fidelity_report_iman.md to avoid overwriting)")
     args = parser.parse_args()
-    main(args.reference, args.target_model, args.target_label)
+    main(args.reference, args.target_model, args.target_label, args.output_report)
