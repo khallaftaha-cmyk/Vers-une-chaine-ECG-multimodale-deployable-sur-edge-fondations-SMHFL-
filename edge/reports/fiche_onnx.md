@@ -1,150 +1,158 @@
-# Fiche ONNX — Modèle CNN-1D + BiLSTM (volet Edge, Taher KHALLAF)
+# Fiche ONNX — Volet Edge (Taher KHALLAF)
 
-## Identité
+Ce document couvre les deux modèles utilisés au cours du stage : le modèle
+placeholder entraîné par Taher (PyTorch), et le modèle final entraîné par
+Iman sur Chapman-Shaoxing (Keras/TensorFlow).
+
+---
+
+## Modèle 1 — Placeholder (Taher, PyTorch)
+
+### Identité
 
 | Champ | Valeur |
 |---|---|
-| Modèles disponibles (Taher) | `ecg_model_fp32.onnx`, `ecg_model_int8_dynamic.onnx`, `ecg_model_int8_static.onnx` |
-| Modèle disponible (Iman) | `chapman_ecg_model_fp32.onnx`, `chapman_ecg_model_int8_dynamic.onnx`, `chapman_ecg_model_int8_static.onnx` |
-| Modèle recommandé pour déploiement Pi | **`ecg_model_int8_static.onnx`** (Taher) / **`chapman_ecg_model_fp32.onnx`** (Iman — déjà très léger) |
-| Dataset d'entraînement | Chapman-Shaoxing (WFDB) — les deux modèles |
-| Opset ONNX | 17 (Taher) / à confirmer (Iman) |
-| Exporteur | `torch.onnx.export` (Taher) / framework Iman à confirmer |
+| Modèles disponibles | `ecg_model_fp32.onnx`, `ecg_model_int8_dynamic.onnx`, `ecg_model_int8_static.onnx` |
+| Modèle recommandé | **`ecg_model_int8_static.onnx`** |
+| Framework d'origine | PyTorch → ONNX (exporteur legacy, `dynamo=False`) |
+| Opset ONNX | 17 |
 
-## Architecture
+### Architecture
 
-### Modèle Taher (CNN-1D + BiLSTM)
-- **Type :** CNN-1D + BiLSTM
-- **Canaux CNN :** 64 → 128 → 256 (~1.3M paramètres)
-- **Kernels CNN :** 7, 5, 3
-- **LSTM :** bidirectionnel, hidden_size=128, num_layers=2
-- **Tête de classification :** Linear(256→64) → ReLU → Dropout → Linear(64→4)
-- **Input :** channels-first `(batch, 12, 5000)`
+- CNN-1D (canaux 64→128→256, kernels 7/5/3) + BiLSTM (hidden=128, 2 couches)
+- Tête : Linear(256→128) → ReLU → Dropout → Linear(128→4)
 
-### Modèle Iman (architecture légère)
-- **Taille FP32 :** 0.75 MB → architecture significativement plus petite
-- **Input :** channels-last `(batch, 5000, 12)` — géré automatiquement par `onnx_io_utils.prepare_input()`
+### Entrée / Sortie
 
-## Prétraitement
+| | Nom | Shape | Type |
+|---|---|---|---|
+| Entrée | `ecg_input` | `(batch, 12, 5000)` — **channels-first** | float32 |
+| Sortie | `classification` | `(batch, 4)` — logits bruts (pas de softmax dans le graphe) | float32 |
 
-- Filtre passe-bande **0.5–45 Hz** (Butterworth, ordre 4, `filtfilt`)
-- Normalisation **z-score** par dérivation
-- Padding/troncature à **5000 échantillons** (10s @ 500 Hz)
-- ⚠️ Le même prétraitement doit être appliqué aux deux modèles pour que les résultats soient comparables.
+### Prétraitement
 
-## Entrée / Sortie (contrat d'interface partagé)
+- Filtre passe-bande 0.5–45 Hz, normalisation z-score par enregistrement.
 
-| | Nom | Shape Taher | Shape Iman | Type |
-|---|---|---|---|---|
-| Entrée | `ecg_input` | `(batch, 12, 5000)` | `(batch, 5000, 12)` | float32 |
-| Sortie | `classification` | `(batch, 4)` | `(batch, 4)` | float32 (logits) |
+### Classes (ordre confirmé)
 
-- 12 dérivations, ordre : I, II, III, aVR, aVL, aVF, V1–V6
-- Axe batch dynamique (`dynamic_axes` activé)
-- La différence channels-first/last est gérée automatiquement par `onnx_io_utils.detect_orientation()` et `prepare_input()`
-
-## Classes (4) — partagées
-
-| Classe | Code SNOMED | Index |
+| Index | Classe | Code SNOMED |
 |---|---|---|
-| Sinus Bradycardia (SB) | 426177001 | 0 |
-| Sinus Rhythm (SR) | 426783006 | 1 |
-| Atrial Fibrillation (AFIB) | 164889003 | 2 |
-| GSVT | 426761007 | 3 |
+| 0 | Sinus Bradycardia (SB) | 426177001 |
+| 1 | Sinus Rhythm (SR) | 426783006 |
+| 2 | Atrial Fibrillation (AFIB) | 164889003 |
+| 3 | GSVT | 426761007 |
 
-⚠️ **Point critique :** l'ordre des classes doit être identique entre les deux modèles. L'évaluation de précision d'Iman sur le test set Chapman montre une accuracy ~0.66% (aléatoire) — cela indique un **désalignement du class_to_idx** entre son entraînement et notre test set. À confirmer avec Iman avant toute comparaison d'accuracy.
+### Performance (PC / Raspberry Pi 4)
 
-## Quantification
-
-Deux approches testées sur le modèle Taher :
-
-| | Dynamique | Statique |
-|---|---|---|
-| Ops quantifiés | MatMul, LSTM | Conv, Gemm, MatMul (**LSTM exclu**) |
-| Calibration requise | Non | Oui (200 échantillons réels) |
-| Réduction de taille | -74.3% | -12.3% |
-| Effet sur la latence | **Dégrade** | **Améliore** |
-
-**Recommandation : quantification statique.** La quantification dynamique réduit la taille mais dégrade la latence car le Cortex-A72 (Pi 4, ARMv8.0) n'a pas d'accélération INT8 matérielle (SDOT/UDOT, disponible à partir d'ARMv8.2). La quantification statique cible les Conv (goulot de calcul) et donne un gain réel de latence avec une perte d'accuracy négligeable.
-
-**Pour le modèle Iman :** quantification recommandée après confirmation du class_to_idx. Son modèle est déjà très petit (0.75 MB) — la statique resterait préférable pour la latence.
-
-## Performance (PC, Windows CPU — Intel i5-8250U)
-
-### Modèle Taher (CNN-1D + BiLSTM)
-
-| Métrique | FP32 | INT8 dynamique | INT8 statique |
+| Métrique | FP32 | INT8 Dynamique | INT8 Statique |
 |---|---|---|---|
-| Taille modèle | 3.64 MB | 0.93 MB (-74.3%) | 3.19 MB (-12.3%) |
-| Latence moyenne | 18.01 ms | 41.88 ms (+2.3×) | **15.57 ms (-14%)** |
-| Latence p95 | 20.68 ms | 45.29 ms | 18.42 ms |
-| Accuracy | 0.9893 | 0.9901 | 0.9893 |
-| Macro F1 | 0.9885 | 0.9892 (+0.0007) | 0.9873 (-0.0012) |
+| Taille | 3.64 MB | 0.93 MB | 3.19 MB |
+| Latence PC | 18.01 ms | 41.88 ms | **15.57 ms** |
+| Latence Pi 4 | 93.17 ms | 121.06 ms | **86.31 ms** |
+| Accuracy | 98.93% | 99.01% | 98.93% |
+| Macro F1 | 0.9885 | 0.9892 | 0.9873 |
 
-### Modèle Iman (architecture légère, channels-last)
+**Recommandation : INT8 statique** — seule variante améliorant taille ET latence, sur PC comme sur Pi 4.
 
-| Métrique | FP32 | INT8 dynamique | INT8 statique |
+### Fidélité MBD (MIL / SIL / PIL)
+
+| Comparaison | Accord prédiction | Écart max | Écart moyen |
 |---|---|---|---|
-| Taille modèle | 0.75 MB | 0.21 MB (-72.0%) | 0.49 MB (-34.7%) |
-| Latence moyenne | **3.75 ms** | 23.76 ms (+6.3×) | **6.96 ms** |
-| Latence p95 | 4.09 ms | 33.49 ms | 8.27 ms |
-| Accuracy | ⚠️ *invalide* | ⚠️ *invalide* | ⚠️ *invalide* |
-| Macro F1 | ⚠️ *invalide* | ⚠️ *invalide* | ⚠️ *invalide* |
+| PyTorch (MIL) vs ONNX FP32 (SIL, PC) | 100.00% | 0.000002 | 0.000001 |
+| ONNX FP32 (SIL) vs ONNX INT8 statique (SIL) | 100.00% | 0.189241 | 0.039212 |
+| ONNX INT8 statique (SIL) vs Raspberry Pi 4 (PIL) | 100.00% | 0.088106 | 0.014684 |
 
-*L'accuracy d'Iman n'est pas mesurable avec notre test set actuel (désalignement class_to_idx présumé).*
+---
 
-## Performance (Raspberry Pi 4, aarch64 — Cortex-A72 @ 1.8GHz, 4 Go RAM)
+## Modèle 2 — Final (Iman, Chapman-Shaoxing, Keras/TensorFlow)
 
-### Modèle Taher
+### Identité
 
-| Métrique | FP32 | INT8 dynamique | INT8 statique |
+| Champ | Valeur |
+|---|---|
+| Modèles disponibles | `chapman_ecg_model_fp32.onnx`, `chapman_ecg_model_int8_dynamic.onnx`, `chapman_ecg_model_int8_static.onnx` |
+| Modèle recommandé | **`chapman_ecg_model_fp32.onnx`** (voir Performance) |
+| Framework d'origine | Keras/TensorFlow → ONNX via tf2onnx |
+| Opset ONNX | 13 (fonctionnel malgré < 17 requis pour le modèle Taher) |
+
+### Architecture
+
+Conv1D(128, k=7) + BN + ReLU → MaxPool(4) → Conv1D(128, k=5) + BN + ReLU →
+MaxPool(4) → BiLSTM(64) → Dropout(0.5) → Dense(4, softmax) — 193 284 paramètres.
+
+### Entrée / Sortie
+
+| | Nom | Shape | Type |
 |---|---|---|---|
-| Taille modèle | 3.64 MB | 0.93 MB | 3.19 MB |
-| Latence moyenne | 93.17 ms | 121.06 ms (+1.3×) | **86.31 ms (-7%)** |
-| Latence p95 | 93.44 ms | 127.10 ms | 86.57 ms |
-| Throughput | 10.70 s/sec | 8.24 s/sec | **11.55 s/sec** |
-| RAM | 71.24 MB | 74.16 MB | 75.95 MB |
-| Charge CPU | 99.5% | 100.0% | 100.0% |
+| Entrée | `ecg_input` | `(batch, 5000, 12)` — **channels-last** (convention Keras) | float32 |
+| Sortie | `dense_1` | `(batch, 4)` — **probabilités déjà softmax dans le graphe** | float32 |
 
-### Modèle Iman (mesuré sur Pi 4)
+⚠️ Gérées automatiquement côté Edge via `onnx_io_utils.py` (détection d'orientation) — aucune action manuelle requise à l'usage.
 
-| Métrique | FP32 | INT8 dynamique | INT8 statique |
+### Prétraitement obligatoire
+
+- Filtre passe-bande Butterworth ordre 4, **0.5–40 Hz** (différent du modèle 1 : 45 Hz), `filtfilt`.
+- Normalisation z-score **par enregistrement**.
+
+### ⚠️ Correction requise : ordre des classes en sortie
+
+L'ordre documenté dans la fiche d'origine d'Iman ([SB, SR, AFIB, GSVT]) ne
+correspond **pas** à l'ordre réel des neurones de sortie du modèle exporté.
+Confirmé par matrice de confusion (schéma de permutation cohérent à >95%
+sur toutes les classes) :
+
+| Index réel du modèle | Classe réelle |
+|---|---|
+| 0 | AFIB |
+| 1 | GSVT |
+| 2 | SB |
+| 3 | SR |
+
+Cause probable : encodage alphabétique (LabelEncoder ou équivalent) côté
+entraînement, non reflété dans la documentation d'origine.
+
+**Tout script consommant la sortie brute de ce modèle doit appliquer la
+permutation `[2, 3, 0, 1]`** (déjà intégrée via `--pred-permutation 2,3,0,1`
+dans `evaluate_onnx_accuracy.py` et `realtime_inference_publisher.py`).
+
+### Performance (PC / Raspberry Pi 4)
+
+| Métrique | FP32 | INT8 Dynamique | INT8 Statique |
 |---|---|---|---|
-| Taille modèle | 0.75 MB | 0.21 MB | 0.49 MB |
-| Latence moyenne | **26.19 ms** | 33.67 ms | 35.65 ms |
-| Latence p95 | 26.35 ms | 33.79 ms | 36.03 ms |
-| Throughput | 37.70 s/sec | 29.41 s/sec | 27.79 s/sec |
-| RAM | 72.68 MB | 74.78 MB | 75.45 MB |
+| Taille | 0.75 MB | 0.21 MB | 0.49 MB |
+| Latence PC | **3.75 ms** | 23.76 ms | 6.24 ms |
+| Latence Pi 4 | **26.15 ms** | 33.82 ms | 36.03 ms |
+| Accuracy (corrigée) | 96.04% | 95.96% | 96.04% |
+| Macro F1 | 0.9385 | 0.9378 | 0.9384 |
 
-**Contrainte temps réel :** toutes les variantes traitent 10s d'ECG bien en-deçà de 10 000 ms. La latence max observée est 121 ms (Taher, INT8 dynamique sur Pi 4).
+**Recommandation : FP32** — contrairement au modèle 1, la quantification
+dégrade la latence sur cette architecture plus légère (aucun gain,
+quelle que soit la méthode), sur PC comme sur Pi 4.
 
-## Chaîne temps réel (MQTT)
+### Fidélité MBD (SIL / PIL — pas de comparaison MIL, modèle Keras)
 
-- Chaîne validée de bout en bout : Raspberry Pi 4 (inférence ONNX + publication) → broker Mosquitto (PC) → subscriber (PC).
-- Modèle utilisé en démo : `ecg_model_int8_static.onnx` (Taher).
-- Prédictions publiées : classe prédite, confiance, classe réelle, indicateur correct/incorrect — à partir de signaux ECG réels du jeu de test.
-- Reconnexion MQTT automatique avec backoff implémentée.
-
-## Fidélité MBD (PyTorch → ONNX → Pi)
-
-| Étape | Accord prédictions | Max |Δlogit| | Moy |Δlogit| |
+| Comparaison | Accord prédiction | Écart max | Écart moyen |
 |---|---|---|---|
-| PyTorch (MIL) → ONNX FP32 (SIL) | **100%** | 0.000002 | 0.000001 |
-| ONNX FP32 (SIL) → ONNX INT8 statique (SIL) | **100%** | 0.189241 | 0.039212 |
-| ONNX INT8 statique (SIL) → Pi 4 (PIL) | **100%** | 0.088106 | 0.014684 |
+| ONNX FP32 (SIL, PC) vs ONNX INT8 statique (SIL, PC) | 100.00% | 0.057191 | 0.003256 |
+| ONNX INT8 statique (SIL, PC) vs Raspberry Pi 4 (PIL) | 100.00% | 0.020382 | 0.000374 |
 
-100% d'accord de bout en bout sur 30 signaux réels — la chaîne de déploiement préserve le comportement du modèle.
+### Chaîne temps réel MQTT
 
-## Historique des changements
+Validée de bout en bout avec ce modèle (INT8 statique, signaux réels,
+filtre 40 Hz, permutation de classes appliquée) : Raspberry Pi 4 → broker
+Mosquitto → PC, prédictions correctes en direct.
 
-- Correction du mapping SNOMED `426761007` : `Sinus Irregularity` → `GSVT`, pour aligner les classes avec le modèle d'Iman.
-- Export ONNX : bascule vers l'exporteur legacy (`dynamo=False`) suite à une erreur de shape inference sur le BiLSTM.
-- Ajout de la quantification statique (Conv/Gemm/MatMul, LSTM exclu) suite à la dégradation de latence de la quantification dynamique.
-- Ajout de `onnx_io_utils.py` : détection automatique channels-first/last pour la compatibilité avec le modèle d'Iman.
-- Ajout de `validate_onnx_interface.py` : validation du contrat d'interface en quelques secondes.
+---
+
+## Historique des corrections (chronologique)
+
+1. Mapping SNOMED `426761007` : `Sinus Irregularity` → `GSVT` (alignement classes avec Iman).
+2. Export ONNX (modèle 1) : bascule vers l'exporteur legacy (`dynamo=False`) suite à une erreur de shape sur le BiLSTM.
+3. Quantification statique ajoutée suite à la dégradation de latence observée en dynamique.
+4. Intégration modèle Iman : détection automatique de l'orientation channels-last (`onnx_io_utils.py`).
+5. Correction du filtre passe-bande (45→40 Hz) pour le modèle Iman.
+6. Correction de l'ordre des classes en sortie du modèle Iman (permutation `[2,3,0,1]`).
 
 ## Reste à faire
 
-- Confirmer le class_to_idx d'Iman et re-évaluer la précision de son modèle quantifié.
-- Mesure de la consommation électrique sur Raspberry Pi (nécessite un wattmètre USB-C).
-- Documentation finale (rapport de stage).
+- Mesure de la consommation électrique sur Raspberry Pi — **non réalisée, équipement non disponible**.
