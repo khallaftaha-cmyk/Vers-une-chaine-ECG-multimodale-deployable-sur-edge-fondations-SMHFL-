@@ -1,0 +1,26 @@
+# Multi-stage lightweight edge inference container
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+
+# Install minimal OS dependencies for numerical libraries & OpenMP
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install lightweight edge runtime
+COPY edge/edge_deploy/requirements_pi.txt .
+RUN pip install --no-cache-dir -r requirements_pi.txt
+
+# Copy configs, model utilities, and the real-time publisher
+COPY edge/configs/ ./configs/
+COPY edge/src/onnx_io_utils.py ./src/
+COPY edge/src/realtime_inference_publisher.py ./src/
+
+# Copy the lightweight calibrated static INT8 models
+COPY edge/models/ecg_model_int8_static.onnx ./models/
+COPY edge/models/chapman_ecg_model_int8_static.onnx ./models/
+
+# Default entrypoint runs MQTT inference engine
+ENTRYPOINT ["python", "src/realtime_inference_publisher.py"]
+CMD ["--model-path", "models/ecg_model_int8_static.onnx"]

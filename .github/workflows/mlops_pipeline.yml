@@ -1,0 +1,94 @@
+name: "Edge AI CI/CD & Model Promotion Pipeline"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "edge/models/**"
+      - "edge/src/**"
+      - "edge/configs/**"
+      - "Dockerfile.edge"
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  validate-and-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "Install CI Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install onnx onnxruntime numpy scipy scikit-learn pyyaml psutil
+
+      - name: "Stage 1 - Interface Contract Validation"
+        run: |
+          python edge/src/validate_onnx_interface.py --model-path edge/models/ecg_model_fp32.onnx
+          python edge/src/validate_onnx_interface.py --model-path edge/models/chapman_ecg_model_fp32.onnx
+
+      - name: "Stage 2 - SIL Benchmark and Regression Verification"
+        run: |
+          python -m edge.src.benchmark_onnx --model-path edge/models/ecg_model_fp32.onnx
+          python -m edge.src.benchmark_onnx --model-path edge/models/ecg_model_int8_static.onnx
+
+      - name: "Stage 3 - Generate Automated Model Card"
+        run: |
+          python edge/scripts/generate_model_card.py \
+            "edge/reports/(T)benchmark_ecg_model_fp32.md" \
+            "edge/reports/(T)benchmark_ecg_model_int8_static.md" \
+            "edge/reports/MODEL_CARD.md" \
+            "${{ github.sha }}"
+
+      - name: "Stage 4 - Upload Model Card and Reports"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "model-card-and-reports"
+          path: |
+            edge/reports/MODEL_CARD.md
+            edge/reports/*.md
+
+  build-and-push-edge-container:
+    needs: validate-and-benchmark
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up QEMU (for ARM64 cross-compilation)"
+        uses: docker/setup-qemu-action@v3
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Log in to GitHub Container Registry (GHCR)"
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Build and Push Multi-Arch Edge Container (ARM64 and AMD64)"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.edge
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/ecg-edge:latest
+            ghcr.io/${{ github.repository }}/ecg-edge:${{ github.sha }}
