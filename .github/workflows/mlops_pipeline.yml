@@ -87,7 +87,9 @@ jobs:
       - name: "Set lowercase image repository"
         id: repo
         run: |
-          echo "IMAGE_NAME=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/ecg-edge" >> "$GITHUB_OUTPUT"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER}/ecg-edge" >> "$GITHUB_OUTPUT"
+
 
       - name: "Build and Push Multi-Arch Edge Container (ARM64 and AMD64)"
         uses: docker/build-push-action@v5
