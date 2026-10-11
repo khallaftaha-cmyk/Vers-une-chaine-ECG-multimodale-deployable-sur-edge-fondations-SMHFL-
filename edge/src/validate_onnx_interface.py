@@ -40,9 +40,24 @@ def check(condition: bool, ok_msg: str, fail_msg: str, failures: list) -> None:
 
 
 def validate(model_path: str) -> bool:
-    model_path = Path(model_path)
-    if not model_path.is_absolute():
-        model_path = PROJECT_ROOT / model_path
+    raw_path = Path(model_path)
+    if raw_path.is_absolute():
+        resolved_path = raw_path
+    elif raw_path.exists():
+        resolved_path = raw_path
+    elif (PROJECT_ROOT / raw_path).exists():
+        resolved_path = PROJECT_ROOT / raw_path
+    elif str(raw_path).startswith("edge/") or str(raw_path).startswith("edge\\"):
+        # Strip leading edge/ if running from inside edge/ or if PROJECT_ROOT is edge
+        stripped = Path(*raw_path.parts[1:])
+        if (PROJECT_ROOT / stripped).exists():
+            resolved_path = PROJECT_ROOT / stripped
+        else:
+            resolved_path = PROJECT_ROOT / raw_path
+    else:
+        resolved_path = PROJECT_ROOT / raw_path
+
+    model_path = resolved_path
 
     config = load_config()
     expected_classes = config.get('model', {}).get('classes', [])
