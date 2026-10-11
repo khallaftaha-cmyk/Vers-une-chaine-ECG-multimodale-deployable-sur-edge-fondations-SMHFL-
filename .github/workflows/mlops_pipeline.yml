@@ -8,9 +8,11 @@ on:
       - "edge/src/**"
       - "edge/configs/**"
       - "Dockerfile.edge"
+      - ".github/workflows/**"
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+
 
 jobs:
   validate-and-benchmark:
