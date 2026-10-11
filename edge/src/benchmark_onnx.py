@@ -11,19 +11,44 @@ from typing import Dict
 from datetime import datetime
 
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from src.data_loader import load_config
 
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / 'configs' / 'config.yaml'
 REPORTS_DIR = PROJECT_ROOT / 'reports'
 
 
+def load_config(config_path=None) -> dict:
+    target = Path(config_path or DEFAULT_CONFIG_PATH)
+    if not target.is_absolute() and not target.exists():
+        if (PROJECT_ROOT / target).exists():
+            target = PROJECT_ROOT / target
+    with open(target, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def resolve_model_path(model_path: str) -> Path:
+    raw = Path(model_path)
+    if raw.is_absolute() and raw.exists():
+        return raw
+    if raw.exists():
+        return raw
+    if (PROJECT_ROOT / raw).exists():
+        return PROJECT_ROOT / raw
+    if str(raw).startswith("edge/") or str(raw).startswith("edge\\"):
+        stripped = Path(*raw.parts[1:])
+        if (PROJECT_ROOT / stripped).exists():
+            return PROJECT_ROOT / stripped
+    return PROJECT_ROOT / raw
+
+
 def get_model_size(model_path: str) -> Dict[str, float]:
-    size_bytes = os.path.getsize(model_path)
-    external_data_path = model_path + '.data'
+    model_path_str = str(model_path)
+    size_bytes = os.path.getsize(model_path_str)
+    external_data_path = model_path_str + '.data'
     if os.path.exists(external_data_path):
         size_bytes += os.path.getsize(external_data_path)
     return {
@@ -58,7 +83,7 @@ def measure_latency(session: ort.InferenceSession, input_data: np.ndarray,
 
 
 def measure_throughput(session: ort.InferenceSession, input_data: np.ndarray,
-                        duration_seconds: float = 5.0) -> float:
+                       duration_seconds: float = 5.0) -> float:
     input_name = session.get_inputs()[0].name
 
     start_time = time.perf_counter()
@@ -72,12 +97,13 @@ def measure_throughput(session: ort.InferenceSession, input_data: np.ndarray,
 
 
 def benchmark_model(model_path: str, config_path=None) -> Dict:
+    model_file = resolve_model_path(model_path)
     config = load_config(config_path or DEFAULT_CONFIG_PATH)
     bench_cfg = config.get('benchmark', {})
 
-    size_info = get_model_size(model_path)
+    size_info = get_model_size(str(model_file))
 
-    session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    session = ort.InferenceSession(str(model_file), providers=['CPUExecutionProvider'])
 
     input_shape = session.get_inputs()[0].shape
     shape = [1 if type(dim) == str else dim for dim in input_shape]
